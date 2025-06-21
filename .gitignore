@@ -1,0 +1,9 @@
+# Environment variables - DO NOT COMMIT THIS
+.env
+
+# Python cache and artifacts
+__pycache__/
+*.pyc
+
+# IDE / Editor specific files
+.idea/

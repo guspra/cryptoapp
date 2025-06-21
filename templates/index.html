@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Dashboard</title>
+    <style>
+        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f2f5; }
+        .container { background-color: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); min-width: 300px; }
+        h1 { color: #333; }
+        h2 { color: #555; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-top: 20px; }
+        h3 { color: #666; margin-top: 15px; margin-bottom: 5px; }
+        ul { list-style-type: none; padding: 0; }
+        li { display: flex; justify-content: space-between; padding: 8px 0; font-size: 1.1em; }
+        .asset { font-weight: bold; }
+        .balance { color: #28a745; }
+        .error { color: #dc3545; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crypto Dashboard</h1>
+
+        <!-- Market Prices Section -->
+        <div>
+            <h2>Market Prices</h2>
+            {% if price_error %}
+                <p class="error">{{ price_error }}</p>
+            {% elif prices %}
+                <ul>
+                    {% for item in prices %}
+                        <li><span class="asset">{{ item.symbol }}</span> <span class="balance">${{ "%.2f"|format(item.price) }}</span></li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p>Could not load prices.</p>
+            {% endif %}
+        </div>
+
+        <!-- Balances Section -->
+        <div>
+            <h2>My Wallets</h2>
+            {% if not keys_set %}
+                <p class="error">API keys not set. Cannot display balances.</p>
+            {% elif balance_error %}
+                <p class="error">{{ balance_error }}</p>
+            {% else %}
+                <div>
+                    <h3>Spot Wallet</h3>
+                    <ul>
+                        {% for asset, balance in spot_assets.items() %}
+                            <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
+                        {% else %}
+                            <li>No assets found.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div>
+                    <h3>Futures Wallet</h3>
+                    <ul>
+                        {% for asset, balance in futures_assets.items() %}
+                            <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
+                        {% else %}
+                            <li>No assets found.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
