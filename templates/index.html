@@ -28,20 +28,10 @@
         <div class="container">
             <h1>Crypto Dashboard</h1>
 
-            <!-- Market Prices Section (Polling) -->
+            <!-- Market Prices Section (Polling) - Content loaded by JS -->
             <div id="prices">
                 <h2>Market Prices (REST API)</h2>
-                {% if price_error %}
-                    <p class="error">{{ price_error }}</p>
-                {% elif prices %}
-                    <ul>
-                        {% for item in prices %}
-                            <li><span class="asset">{{ item.symbol }}</span> <span class="balance">${{ item.price|format_price(item.symbol) }}</span></li>
-                        {% endfor %}
-                    </ul>
-                {% else %}
-                    <p>Could not load prices.</p>
-                {% endif %}
+                <p>Loading prices...</p>
             </div>
             <div id="price-update-message" style="text-align: center; margin-top: 10px; color: #888; font-size: 0.9em;"></div>
 
@@ -100,29 +90,41 @@
 </body>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
+    // Define PRICE_PRECISION globally for use in both polling and WebSocket scripts
+    const PRICE_PRECISION = {
+        "BTC/USDT": 2, "ETH/USDT": 4, "DOGE/USDT": 7,
+        "BTCUSDT": 2, "ETHUSDT": 4, "DOGEUSDT": 7,
+    };
+
+    function formatPrice(price, symbol) {
+        const precision = PRICE_PRECISION[symbol] || 2;
+        return `$${price.toLocaleString('en-US', {minimumFractionDigits: precision, maximumFractionDigits: precision})}`;
+    }
+
     // --- REST API Polling Script (for original box) ---
     function updatePrices() {
-        fetch('/')
-            .then(response => response.text())
-            .then(html => {
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-                const newPricesDiv = doc.querySelector('#prices');
-                const currentPricesDiv = document.querySelector('#prices');
+        fetch('/api/prices') // Fetch from new API endpoint
+            .then(response => response.json())
+            .then(data => {
+                const currentPricesUl = document.querySelector('#prices ul');
                 const updateMessageDiv = document.querySelector('#price-update-message');
 
-                if (newPricesDiv && currentPricesDiv) {
-                    currentPricesDiv.innerHTML = newPricesDiv.innerHTML;
+                if (data.success && data.prices && currentPricesUl) {
+                    let newHtml = '';
+                    data.prices.forEach(item => {
+                        newHtml += `<li><span class="asset">${item.symbol}</span> <span class="balance">${formatPrice(item.price, item.symbol)}</span></li>`;
+                    });
+                    currentPricesUl.innerHTML = newHtml;
                     const now = new Date();
                     updateMessageDiv.textContent = `Prices last updated: ${now.toLocaleString()}`;
                 } else {
-                    if (updateMessageDiv) updateMessageDiv.textContent = 'Failed to update polled prices.';
+                    if (updateMessageDiv) updateMessageDiv.textContent = `Failed to update polled prices: ${data.error || 'Unknown error'}`;
                 }
             })
             .catch(error => {
                 console.error('Error updating prices:', error);
                 const updateMessageDiv = document.querySelector('#price-update-message');
-                if (updateMessageDiv) updateMessageDiv.textContent = 'Error updating polled prices.';
+                if (updateMessageDiv) updateMessageDiv.textContent = 'Network error updating polled prices.';
             });
     }
     setInterval(updatePrices, 5000);
@@ -130,12 +132,10 @@
     // --- New WebSocket Script (for real-time box) ---
     document.addEventListener('DOMContentLoaded', (event) => {
         const PRICE_PRECISION = {
-            "BTCUSDT": 2,
-            "ETHUSDT": 4,
-            "DOGEUSDT": 7,
-        };
+            "BTCUSDT": 2, "ETHUSDT": 4, "DOGEUSDT": 7,
+        }; // This is now redundant, can be removed if formatPrice is used
 
-        const socket = io();
+        const socket = io(); // This should be outside DOMContentLoaded if you want it to connect immediately
         const wsStatus = document.getElementById('ws-status');
 
         socket.on('connect', () => {
@@ -156,7 +156,7 @@
             if (priceElement) {
                 const oldPrice = parseFloat(priceElement.textContent.replace(/[^0-9.-]+/g,"")) || 0;
                 const precision = PRICE_PRECISION[symbol] || 2;
-                priceElement.textContent = `$${price.toLocaleString('en-US', {minimumFractionDigits: precision, maximumFractionDigits: precision})}`;
+                priceElement.textContent = formatPrice(price, symbol); // Use the shared formatPrice function
                 
                 // Add a visual flash effect
                 priceElement.style.color = (price > oldPrice) ? '#28a745' : '#dc3545'; // Green up, Red down
@@ -164,6 +164,29 @@
                 setTimeout(() => { priceElement.style.color = '#333'; }, 600); // Return to default color
             }
         });
+
+        // --- Initial Load of Market Prices (REST API) ---
+        const marketPricesDiv = document.getElementById('prices');
+        fetch('/api/prices')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.prices) {
+                    let pricesHtml = '<h2>Market Prices (REST API)</h2><ul>';
+                    data.prices.forEach(item => {
+                        pricesHtml += `<li><span class="asset">${item.symbol}</span> <span class="balance">${formatPrice(item.price, item.symbol)}</span></li>`;
+                    });
+                    pricesHtml += '</ul>';
+                    marketPricesDiv.innerHTML = pricesHtml;
+                    const now = new Date();
+                    document.querySelector('#price-update-message').textContent = `Prices last updated: ${now.toLocaleString()}`;
+                } else {
+                    marketPricesDiv.innerHTML = `<h2>Market Prices (REST API)</h2><p class="error">${data.error || 'Could not load prices.'}</p>`;
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching initial prices:', error);
+                marketPricesDiv.innerHTML = `<h2>Market Prices (REST API)</h2><p class="error">Network error fetching initial prices.</p>`;
+            });
 
         // --- New Asynchronous Balance Fetching Script ---
         const walletsContent = document.getElementById('wallets-content');

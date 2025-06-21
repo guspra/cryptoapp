@@ -38,29 +38,16 @@ def format_price_filter(price, symbol):
 
 @app.route("/")
 def index():
-    # --- 1. Fetch Public Market Prices (No Auth Needed) ---
-    prices = []
-    price_error = None
-    try:
-        public_exchange = ccxt.binance()
-        symbols_to_fetch = ["BTC/USDT", "ETH/USDT", "DOGE/USDT"]
-        tickers = public_exchange.fetch_tickers(symbols_to_fetch)
-        prices = [
-            {"symbol": ticker["symbol"], "price": ticker["last"]}
-            for symbol, ticker in tickers.items()
-        ]
-    except Exception as e:
-        price_error = f"Could not fetch market prices: {e}"
+    # --- 1. Initial page load (no prices fetched here) ---
+    # Prices will be fetched asynchronously by JavaScript after page load.
 
-    # --- 2. Check for keys, but DO NOT fetch balances here ---
+    # --- Check for keys, but DO NOT fetch balances here ---
     api_key = os.environ.get("BINANCE_API_KEY")
     secret_key = os.environ.get("BINANCE_SECRET_KEY")
     keys_set = bool(api_key and secret_key)
 
     return render_template(
         "index.html",
-        prices=prices,
-        price_error=price_error,
         keys_set=keys_set,
     )
 
@@ -293,6 +280,25 @@ def get_balances():
         )
 
 
+@app.route("/api/prices")
+def get_prices_api():
+    """A dedicated API endpoint to fetch market prices asynchronously."""
+    try:
+        public_exchange = ccxt.binance()
+        symbols_to_fetch = ["BTC/USDT", "ETH/USDT", "DOGE/USDT"]
+        tickers = public_exchange.fetch_tickers(symbols_to_fetch)
+        prices = [
+            {"symbol": ticker["symbol"], "price": ticker["last"]}
+            for symbol, ticker in tickers.items()
+        ]
+        return jsonify({"success": True, "prices": prices})
+    except Exception as e:
+        return (
+            jsonify({"success": False, "error": f"Could not fetch market prices: {e}"}),
+            500,
+        )
+
+
 @socketio.on("connect")
 def handle_connect():
     """Starts the Binance WebSocket client when the first user connects."""
@@ -301,6 +307,12 @@ def handle_connect():
         print("Client connected, starting Binance WebSocket background task.")
         # Use socketio.start_background_task for compatibility with eventlet
         ws_thread = socketio.start_background_task(target=binance_ws_client)
+
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    """Logs when a client disconnects."""
+    print("Client disconnected.")
 
 
 def binance_ws_client():
@@ -327,14 +339,20 @@ def binance_ws_client():
     def on_open(ws):
         print("### WebSocket connection opened ###")
 
-    ws = websocket.WebSocketApp(
-        socket_url,
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close,
-    )
-    ws.run_forever()
+    while True:
+        try:
+            ws = websocket.WebSocketApp(
+                socket_url,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+            ws.run_forever()
+        except Exception as e:
+            print(f"WebSocket client encountered an error: {e}")
+        print("WebSocket connection closed. Reconnecting in 5 seconds...")
+        time.sleep(5)
 
 
 if __name__ == "__main__":
