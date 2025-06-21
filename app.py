@@ -63,7 +63,7 @@ def index():
             balance_error = f"Error fetching balances: {e}"
 
     return render_template(
-        "index.html",
+        "index.html",  # This will now render the entire page including JS
         prices=prices,
         price_error=price_error,
         keys_set=keys_set,

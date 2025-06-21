@@ -22,7 +22,7 @@
         <h1>Crypto Dashboard</h1>
 
         <!-- Market Prices Section -->
-        <div>
+        <div id="prices">
             <h2>Market Prices</h2>
             {% if price_error %}
                 <p class="error">{{ price_error }}</p>
@@ -67,6 +67,36 @@
                 </div>
             {% endif %}
         </div>
+        <div id="price-update-message" style="text-align: center; margin-top: 20px; color: #888; font-size: 0.9em;"></div>
     </div>
 </body>
+<script>
+    function updatePrices() {
+        fetch('/')  // Fetch the same route, which now returns only prices
+            .then(response => response.text())
+            .then(html => {
+                // Parse the HTML response and extract the prices section
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newPricesDiv = doc.querySelector('#prices');
+                const currentPricesDiv = document.querySelector('#prices');
+                const updateMessageDiv = document.querySelector('#price-update-message');
+
+                if (newPricesDiv) {
+                    currentPricesDiv.innerHTML = newPricesDiv.innerHTML;
+                    // Update the message to show the last updated time
+                    const now = new Date();
+                    updateMessageDiv.textContent = `Prices last updated: ${now.toLocaleString()}`;
+                } else {
+                    updateMessageDiv.textContent = 'Failed to update prices.';
+                }
+            })
+            .catch(error => {
+                console.error('Error updating prices:', error);
+                const updateMessageDiv = document.querySelector('#price-update-message');
+                updateMessageDiv.textContent = 'Error updating prices. Check console for details.';
+            });
+    }
+    setInterval(updatePrices, 5000);  // Update prices every 5 seconds
+</script>
 </html>
