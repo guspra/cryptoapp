@@ -1,4 +1,4 @@
-from flask import Flask, render_template
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 import ccxt
 import os
@@ -96,6 +96,93 @@ def index():
         futures_assets=futures_assets,
         balance_error=balance_error,
     )
+
+
+@app.route("/place_order", methods=["POST"])
+def place_order():
+    """Receives order data from the frontend and places it via ccxt."""
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        return (
+            jsonify({"success": False, "error": "API keys not configured on server."}),
+            403,
+        )
+
+    try:
+        data = request.get_json()
+        symbol = data.get("symbol")
+        order_type = data.get("type")
+        side = data.get("side")
+        amount = data.get("amount")
+        price = data.get("price")  # Can be None for market orders
+
+        if not all([symbol, order_type, side, amount]):
+            return (
+                jsonify(
+                    {"success": False, "error": "Missing required order parameters."}
+                ),
+                400,
+            )
+
+        # Initialize authenticated exchange
+        exchange = ccxt.binance(
+            {
+                "apiKey": api_key,
+                "secret": secret_key,
+            }
+        )
+
+        # Create the order
+        order = None
+        if order_type == "market":
+            # For a market buy, the user specifies the cost in quote currency (USDT)
+            order = exchange.create_order(
+                symbol,
+                "market",
+                side,
+                amount=None,  # Amount in base currency is unknown
+                params={"quoteOrderQty": amount},  # Specify cost in quote currency
+            )
+        elif order_type == "limit":
+            # For a limit buy, user specifies cost in USDT and a limit price.
+            # We must calculate the amount in base currency (BTC).
+            if not price or price <= 0:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Limit price must be a positive number.",
+                        }
+                    ),
+                    400,
+                )
+            btc_amount = amount / price
+            order = exchange.create_order(symbol, "limit", side, btc_amount, price)
+
+        return (
+            jsonify({"success": True, "order": order})
+            if order
+            else jsonify({"success": False, "error": "Unsupported order type"})
+        ), 400
+
+    except ccxt.InsufficientFunds as e:
+        return jsonify({"success": False, "error": f"Insufficient funds: {e}"}), 400
+    except ccxt.InvalidOrder as e:
+        return jsonify({"success": False, "error": f"Invalid order: {e}"}), 400
+    except ccxt.AuthenticationError:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Authentication failed. Check your API keys.",
+                }
+            ),
+            401,
+        )
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @socketio.on("connect")

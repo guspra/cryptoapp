@@ -15,6 +15,11 @@
         .asset { font-weight: bold; }
         .balance { color: #28a745; }
         .error { color: #dc3545; text-align: center; }
+        #trade-form div { margin-bottom: 10px; }
+        #trade-form label { display: inline-block; width: 120px; }
+        #trade-form input, #trade-form select { padding: 5px; border-radius: 3px; border: 1px solid #ccc; }
+        #trade-form button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1em; }
+        #trade-form button:hover { background-color: #0056b3; }
     </style>
 </head>
 <body>
@@ -78,9 +83,30 @@
             <ul id="realtime-prices">
                 <li id="ws-BTCUSDT"><span class="asset">BTC/USDT</span><span class="balance">Waiting...</span></li>
                 <li id="ws-ETHUSDT"><span class="asset">ETH/USDT</span><span class="balance">Waiting...</span></li>
-                <li id="ws-DOGEUSDT"><span class="asset">DOGE/USDT</span><span class="balance">Waiting...</span></li>
+                <li id="ws-DOGEUSDT"><span class="asset">DOGE/USDT</span><span class="balance">Waiting...</span></li> 
             </ul>
             <div id="ws-status" style="text-align: center; margin-top: 10px; color: #888; font-size: 0.9em;"></div>
+        </div>
+
+        <!-- New Trading Box Container -->
+        <div class="container">
+            <h2>Trade BTC/USDT</h2>
+            <form id="trade-form" novalidate>
+                <div>
+                    <label for="order-type">Order Type:</label>
+                    <select id="order-type" name="order-type"><option value="market">Market</option><option value="limit">Limit</option></select>
+                </div>
+                <div id="limit-price-group" style="display: none;">
+                    <label for="limit-price">Price (USDT):</label>
+                    <input type="number" id="limit-price" name="limit-price" step="0.01" placeholder="e.g., 65000.50">
+                </div>
+                <div>
+                    <label for="amount" id="amount-label">Amount (USDT):</label>
+                    <input type="number" id="amount" name="amount" step="0.01" required placeholder="e.g., 100.00">
+                </div>
+                <button type="submit">Buy BTC</button>
+            </form>
+            <div id="trade-status" style="text-align: center; margin-top: 15px; font-weight: bold;"></div>
         </div>
     </div>
 </body>
@@ -149,6 +175,61 @@
                 
                 setTimeout(() => { priceElement.style.color = '#333'; }, 600); // Return to default color
             }
+        });
+
+        // --- New Trading Form Script ---
+        const tradeForm = document.getElementById('trade-form');
+        const orderTypeSelect = document.getElementById('order-type');
+        const limitPriceGroup = document.getElementById('limit-price-group');
+        const tradeStatus = document.getElementById('trade-status');
+        const amountLabel = document.getElementById('amount-label');
+        const amountInput = document.getElementById('amount');
+
+        // Show/hide limit price input based on order type
+        orderTypeSelect.addEventListener('change', () => {
+            if (orderTypeSelect.value === 'limit') {
+                limitPriceGroup.style.display = 'block';
+                document.getElementById('limit-price').required = true;
+            } else {
+                limitPriceGroup.style.display = 'none';
+                document.getElementById('limit-price').required = false;
+            }
+        });
+
+        tradeForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            tradeStatus.textContent = 'Placing order...';
+            tradeStatus.style.color = '#888';
+
+            const formData = {
+                symbol: 'BTC/USDT',
+                type: document.getElementById('order-type').value,
+                side: 'buy',
+                amount: parseFloat(document.getElementById('amount').value),
+                price: document.getElementById('order-type').value === 'limit' 
+                    ? parseFloat(document.getElementById('limit-price').value) 
+                    : null,
+            };
+
+            fetch('/place_order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    tradeStatus.textContent = `Success! Order ID: ${data.order.id}`;
+                    tradeStatus.style.color = '#28a745';
+                } else {
+                    tradeStatus.textContent = `Error: ${data.error}`;
+                    tradeStatus.style.color = '#dc3545';
+                }
+            })
+            .catch(error => {
+                tradeStatus.textContent = 'A network error occurred.';
+                tradeStatus.style.color = '#dc3545';
+            });
         });
     });
 </script>
