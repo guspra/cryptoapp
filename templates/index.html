@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Dashboard</title>
+    <title>Crypto Dashboard</title> 
     <style>
-        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f2f5; }
+        body { font-family: sans-serif; margin: 0; background-color: #f0f2f5; }
         .container { background-color: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); min-width: 300px; }
         h1 { color: #333; }
         h2 { color: #555; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-top: 20px; }
@@ -18,85 +18,138 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Crypto Dashboard</h1>
+    <div class="main-wrapper" style="display: flex; gap: 20px; align-items: flex-start; padding: 20px; flex-wrap: wrap;">
+        <!-- Original Dashboard Container -->
+        <div class="container">
+            <h1>Crypto Dashboard</h1>
 
-        <!-- Market Prices Section -->
-        <div id="prices">
-            <h2>Market Prices</h2>
-            {% if price_error %}
-                <p class="error">{{ price_error }}</p>
-            {% elif prices %}
-                <ul>
-                    {% for item in prices %}
-                        <li><span class="asset">{{ item.symbol }}</span> <span class="balance">${{ "%.2f"|format(item.price) }}</span></li>
-                    {% endfor %}
-                </ul>
-            {% else %}
-                <p>Could not load prices.</p>
-            {% endif %}
-        </div>
-
-        <!-- Balances Section -->
-        <div>
-            <h2>My Wallets</h2>
-            {% if not keys_set %}
-                <p class="error">API keys not set. Cannot display balances.</p>
-            {% elif balance_error %}
-                <p class="error">{{ balance_error }}</p>
-            {% else %}
-                <div>
-                    <h3>Spot Wallet</h3>
+            <!-- Market Prices Section (Polling) -->
+            <div id="prices">
+                <h2>Market Prices (REST API)</h2>
+                {% if price_error %}
+                    <p class="error">{{ price_error }}</p>
+                {% elif prices %}
                     <ul>
-                        {% for asset, balance in spot_assets.items() %}
-                            <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
-                        {% else %}
-                            <li>No assets found.</li>
+                        {% for item in prices %}
+                            <li><span class="asset">{{ item.symbol }}</span> <span class="balance">${{ item.price|format_price(item.symbol) }}</span></li>
                         {% endfor %}
                     </ul>
-                </div>
-                <div>
-                    <h3>Futures Wallet</h3>
-                    <ul>
-                        {% for asset, balance in futures_assets.items() %}
-                            <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
-                        {% else %}
-                            <li>No assets found.</li>
-                        {% endfor %}
-                    </ul>
-                </div>
-            {% endif %}
+                {% else %}
+                    <p>Could not load prices.</p>
+                {% endif %}
+            </div>
+            <div id="price-update-message" style="text-align: center; margin-top: 10px; color: #888; font-size: 0.9em;"></div>
+
+            <!-- Balances Section -->
+            <div>
+                <h2>My Wallets</h2>
+                {% if not keys_set %}
+                    <p class="error">API keys not set. Cannot display balances.</p>
+                {% elif balance_error %}
+                    <p class="error">{{ balance_error }}</p>
+                {% else %}
+                    <div>
+                        <h3>Spot Wallet</h3>
+                        <ul>
+                            {% for asset, balance in spot_assets.items() %}
+                                <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
+                            {% else %}
+                                <li>No assets found.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div>
+                        <h3>Futures Wallet</h3>
+                        <ul>
+                            {% for asset, balance in futures_assets.items() %}
+                                <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
+                            {% else %}
+                                <li>No assets found.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+            </div>
         </div>
-        <div id="price-update-message" style="text-align: center; margin-top: 20px; color: #888; font-size: 0.9em;"></div>
+
+        <!-- New WebSocket Container -->
+        <div class="container">
+            <h2>Real-Time Prices (WebSocket)</h2>
+            <ul id="realtime-prices">
+                <li id="ws-BTCUSDT"><span class="asset">BTC/USDT</span><span class="balance">Waiting...</span></li>
+                <li id="ws-ETHUSDT"><span class="asset">ETH/USDT</span><span class="balance">Waiting...</span></li>
+                <li id="ws-DOGEUSDT"><span class="asset">DOGE/USDT</span><span class="balance">Waiting...</span></li>
+            </ul>
+            <div id="ws-status" style="text-align: center; margin-top: 10px; color: #888; font-size: 0.9em;"></div>
+        </div>
     </div>
 </body>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
+    // --- REST API Polling Script (for original box) ---
     function updatePrices() {
-        fetch('/')  // Fetch the same route, which now returns only prices
+        fetch('/')
             .then(response => response.text())
             .then(html => {
-                // Parse the HTML response and extract the prices section
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, 'text/html');
                 const newPricesDiv = doc.querySelector('#prices');
                 const currentPricesDiv = document.querySelector('#prices');
                 const updateMessageDiv = document.querySelector('#price-update-message');
 
-                if (newPricesDiv) {
+                if (newPricesDiv && currentPricesDiv) {
                     currentPricesDiv.innerHTML = newPricesDiv.innerHTML;
-                    // Update the message to show the last updated time
                     const now = new Date();
                     updateMessageDiv.textContent = `Prices last updated: ${now.toLocaleString()}`;
                 } else {
-                    updateMessageDiv.textContent = 'Failed to update prices.';
+                    if (updateMessageDiv) updateMessageDiv.textContent = 'Failed to update polled prices.';
                 }
             })
             .catch(error => {
                 console.error('Error updating prices:', error);
                 const updateMessageDiv = document.querySelector('#price-update-message');
-                updateMessageDiv.textContent = 'Error updating prices. Check console for details.';
+                if (updateMessageDiv) updateMessageDiv.textContent = 'Error updating polled prices.';
             });
     }
-    setInterval(updatePrices, 5000);  // Update prices every 5 seconds
+    setInterval(updatePrices, 5000);
+
+    // --- New WebSocket Script (for real-time box) ---
+    document.addEventListener('DOMContentLoaded', (event) => {
+        const PRICE_PRECISION = {
+            "BTCUSDT": 2,
+            "ETHUSDT": 4,
+            "DOGEUSDT": 7,
+        };
+
+        const socket = io();
+        const wsStatus = document.getElementById('ws-status');
+
+        socket.on('connect', () => {
+            wsStatus.textContent = 'Connected to real-time feed.';
+            wsStatus.style.color = '#28a745';
+        });
+
+        socket.on('disconnect', () => {
+            wsStatus.textContent = 'Disconnected from real-time feed.';
+            wsStatus.style.color = '#dc3545';
+        });
+
+        socket.on('price_update', function(data) {
+            const symbol = data.symbol; // e.g., "BTCUSDT"
+            const price = parseFloat(data.price);
+            const priceElement = document.querySelector(`#ws-${symbol} .balance`);
+
+            if (priceElement) {
+                const oldPrice = parseFloat(priceElement.textContent.replace(/[^0-9.-]+/g,"")) || 0;
+                const precision = PRICE_PRECISION[symbol] || 2;
+                priceElement.textContent = `$${price.toLocaleString('en-US', {minimumFractionDigits: precision, maximumFractionDigits: precision})}`;
+                
+                // Add a visual flash effect
+                priceElement.style.color = (price > oldPrice) ? '#28a745' : '#dc3545'; // Green up, Red down
+                
+                setTimeout(() => { priceElement.style.color = '#333'; }, 600); // Return to default color
+            }
+        });
+    });
 </script>
 </html>

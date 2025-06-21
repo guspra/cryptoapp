@@ -20,4 +20,5 @@ ENV FLASK_APP=app.py
 EXPOSE 5000
 
 # Run app.py when the container launches
-CMD ["flask", "run", "--host=0.0.0.0"]
+# Use gunicorn with an eventlet worker, which is required for Flask-SocketIO
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "app:app"]

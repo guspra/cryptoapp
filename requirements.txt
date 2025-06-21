@@ -1,2 +1,6 @@
 Flask==2.3.3
 ccxt==4.1.72
+Flask-SocketIO==5.3.6
+websocket-client==1.7.0
+eventlet==0.35.2
+gunicorn==22.0.0

@@ -1,8 +1,33 @@
 from flask import Flask, render_template
+from flask_socketio import SocketIO
 import ccxt
 import os
+import threading
+import websocket
+import json
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = "secret-crypto-app!"  # Secret key for session management
+# Use eventlet for async mode, which is required for background threads
+socketio = SocketIO(app, async_mode="eventlet")
+ws_thread = None  # Global variable to hold the background thread
+
+PRICE_PRECISION = {
+    "BTC/USDT": 2,
+    "ETH/USDT": 4,
+    "DOGE/USDT": 7,
+    "BTCUSDT": 2,
+    "ETHUSDT": 4,
+    "DOGEUSDT": 7,
+}
+
+
+@app.template_filter("format_price")
+def format_price_filter(price, symbol):
+    """Custom Jinja filter to format prices with symbol-specific precision."""
+    precision = PRICE_PRECISION.get(symbol, 2)
+    # Format with commas and the specified number of decimal places
+    return f"{price:,.{precision}f}"
 
 
 @app.route("/")
@@ -16,7 +41,7 @@ def index():
         tickers = public_exchange.fetch_tickers(symbols_to_fetch)
         prices = [
             {"symbol": ticker["symbol"], "price": ticker["last"]}
-            for ticker in tickers.values()
+            for symbol, ticker in tickers.items()
         ]
     except Exception as e:
         price_error = f"Could not fetch market prices: {e}"
@@ -73,5 +98,51 @@ def index():
     )
 
 
+@socketio.on("connect")
+def handle_connect():
+    """Starts the Binance WebSocket client when the first user connects."""
+    global ws_thread
+    if ws_thread is None:
+        print("Client connected, starting Binance WebSocket background task.")
+        # Use socketio.start_background_task for compatibility with eventlet
+        ws_thread = socketio.start_background_task(target=binance_ws_client)
+
+
+def binance_ws_client():
+    """Connects to Binance WebSocket stream and emits price updates."""
+    symbols = ["btcusdt", "ethusdt", "dogeusdt"]
+    streams = "/".join([f"{s}@trade" for s in symbols])
+    socket_url = f"wss://stream.binance.com:9443/stream?streams={streams}"
+
+    def on_message(ws, message):
+        data = json.loads(message)
+        if "stream" in data and "data" in data:
+            payload = data["data"]
+            symbol = payload["s"]
+            price = float(payload["p"])
+            # Emit a 'price_update' event to all connected clients
+            socketio.emit("price_update", {"symbol": symbol, "price": price})
+
+    def on_error(ws, error):
+        print(f"WebSocket Error: {error}")
+
+    def on_close(ws, close_status_code, close_msg):
+        print("### WebSocket closed ###")
+
+    def on_open(ws):
+        print("### WebSocket connection opened ###")
+
+    ws = websocket.WebSocketApp(
+        socket_url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    ws.run_forever()
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # Run the Flask-SocketIO server
+    # The background task will be started on the first client connection.
+    socketio.run(app, host="0.0.0.0", port=5000)
