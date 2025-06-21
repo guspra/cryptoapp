@@ -2,15 +2,21 @@ from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 import ccxt
 import os
-import threading
+import random
 import websocket
 import json
+import uuid
+import time
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "secret-crypto-app!"  # Secret key for session management
 # Use eventlet for async mode, which is required for background threads
 socketio = SocketIO(app, async_mode="eventlet")
 ws_thread = None  # Global variable to hold the background thread
+
+# In-memory store for verification data instead of session
+# Format: {request_id: {"code": "1234", "order_data": {...}, "timestamp": 12345.67}}
+verification_data_store = {}
 
 PRICE_PRECISION = {
     "BTC/USDT": 2,
@@ -46,55 +52,16 @@ def index():
     except Exception as e:
         price_error = f"Could not fetch market prices: {e}"
 
-    # --- 2. Fetch Private Balances (Auth Needed) ---
+    # --- 2. Check for keys, but DO NOT fetch balances here ---
     api_key = os.environ.get("BINANCE_API_KEY")
     secret_key = os.environ.get("BINANCE_SECRET_KEY")
     keys_set = bool(api_key and secret_key)
-    spot_assets, futures_assets, balance_error = {}, {}, None
-
-    if keys_set:
-        try:
-            # Initialize the exchange with authentication credentials
-            auth_exchange = ccxt.binance(
-                {
-                    "apiKey": api_key,
-                    "secret": secret_key,
-                }
-            )
-
-            # Fetch Spot Balance
-            spot_balance = auth_exchange.fetch_balance()
-            spot_assets = {
-                asset: balance["total"]
-                for asset, balance in spot_balance.items()
-                if isinstance(balance, dict)
-                and "total" in balance
-                and balance["total"] > 0
-            }
-
-            # Fetch Futures Balance
-            futures_balance = auth_exchange.fetch_balance(params={"type": "future"})
-            futures_assets = {
-                asset: balance["total"]
-                for asset, balance in futures_balance.items()
-                if isinstance(balance, dict)
-                and "total" in balance
-                and balance["total"] > 0
-            }
-
-        except ccxt.AuthenticationError:
-            balance_error = "Authentication Error. Please check your API keys."
-        except Exception as e:
-            balance_error = f"Error fetching balances: {e}"
 
     return render_template(
-        "index.html",  # This will now render the entire page including JS
+        "index.html",
         prices=prices,
         price_error=price_error,
         keys_set=keys_set,
-        spot_assets=spot_assets,
-        futures_assets=futures_assets,
-        balance_error=balance_error,
     )
 
 
@@ -116,7 +83,6 @@ def place_order():
         order_type = data.get("type")
         side = data.get("side")
         amount = data.get("amount")
-        price = data.get("price")  # Can be None for market orders
 
         if not all([symbol, order_type, side, amount]):
             return (
@@ -126,35 +92,123 @@ def place_order():
                 400,
             )
 
-        # Initialize authenticated exchange
-        exchange = ccxt.binance(
-            {
-                "apiKey": api_key,
-                "secret": secret_key,
-            }
+        # --- Verification System ---
+        # Generate a unique ID for this verification attempt
+        request_id = str(uuid.uuid4())
+        verification_code = str(random.randint(1000, 9999))
+
+        # Store the data on the server, linked to the unique request_id
+        verification_data_store[request_id] = {
+            "code": verification_code,
+            "order_data": data,
+            "timestamp": time.time(),
+        }
+
+        # Send WhatsApp message (replace with your Twilio credentials)
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+        twilio_from = os.environ.get("TWILIO_WHATSAPP_FROM")
+        twilio_to = os.environ.get("TWILIO_WHATSAPP_TO")  # Your number from env
+
+        if not all([account_sid, auth_token, twilio_from, twilio_to]):
+            return (
+                jsonify(
+                    {"success": False, "error": "Twilio credentials not configured."}
+                ),
+                500,
+            )
+
+        from twilio.rest import Client
+
+        client = Client(account_sid, auth_token)
+
+        message = client.messages.create(
+            from_=twilio_from,
+            body=f"Your verification code: {verification_code}",
+            to=twilio_to,
         )
 
-        # Create the order
+        print(
+            f"Sent verification code via WhatsApp. Message SID: {message.sid}"
+        )  # for logging
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "verification_required": True,
+                    "request_id": request_id,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return jsonify({"success": False, "error": f"An error occurred: {str(e)}"}), 500
+
+
+@app.route("/verify_order", methods=["POST"])
+def verify_order():
+    """Verifies the order with the code entered by the user and places the order"""
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        return (
+            jsonify({"success": False, "error": "API keys not configured on server."}),
+            403,
+        )
+
+    data = request.get_json()
+    request_id = data.get("request_id")
+    entered_code = data.get("code")
+
+    if not request_id:
+        return jsonify({"success": False, "error": "Missing request ID."}), 400
+
+    # Retrieve and remove the stored data to prevent reuse
+    stored_data = verification_data_store.pop(request_id, None)
+
+    if not stored_data:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "No order to verify. It may have expired or already been used.",
+                }
+            ),
+            400,
+        )
+
+    # Check for expiry (e.g., 5 minutes)
+    if time.time() - stored_data["timestamp"] > 300:
+        return (
+            jsonify({"success": False, "error": "Verification code has expired."}),
+            400,
+        )
+
+    if entered_code != stored_data["code"]:
+        return jsonify({"success": False, "error": "Invalid verification code."}), 401
+
+    try:
+        order_data = stored_data["order_data"]
+        symbol = order_data.get("symbol")
+        order_type = order_data.get("type")
+        side = order_data.get("side")
+        amount = order_data.get("amount")
+        price = order_data.get("price")
+
+        exchange = ccxt.binance({"apiKey": api_key, "secret": secret_key})
+
         order = None
         if order_type == "market":
-            # For a market buy, the user specifies the cost in quote currency (USDT)
             order = exchange.create_order(
-                symbol,
-                "market",
-                side,
-                amount=None,  # Amount in base currency is unknown
-                params={"quoteOrderQty": amount},  # Specify cost in quote currency
+                symbol, "market", side, amount=None, params={"quoteOrderQty": amount}
             )
         elif order_type == "limit":
-            # For a limit buy, user specifies cost in USDT and a limit price.
-            # We must calculate the amount in base currency (BTC).
             if not price or price <= 0:
                 return (
                     jsonify(
-                        {
-                            "success": False,
-                            "error": "Limit price must be a positive number.",
-                        }
+                        {"success": False, "error": "Limit price must be positive."}
                     ),
                     400,
                 )
@@ -183,6 +237,60 @@ def place_order():
         )
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/balances")
+def get_balances():
+    """A dedicated API endpoint to fetch wallet balances asynchronously."""
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        return (
+            jsonify({"success": False, "error": "API keys not configured on server."}),
+            403,
+        )
+
+    try:
+        auth_exchange = ccxt.binance({"apiKey": api_key, "secret": secret_key})
+
+        spot_balance = auth_exchange.fetch_balance()
+        spot_assets = {
+            asset: balance["total"]
+            for asset, balance in spot_balance.items()
+            if isinstance(balance, dict) and "total" in balance and balance["total"] > 0
+        }
+
+        futures_balance = auth_exchange.fetch_balance(params={"type": "future"})
+        futures_assets = {
+            asset: balance["total"]
+            for asset, balance in futures_balance.items()
+            if isinstance(balance, dict) and "total" in balance and balance["total"] > 0
+        }
+
+        return jsonify(
+            {
+                "success": True,
+                "spot_assets": spot_assets,
+                "futures_assets": futures_assets,
+            }
+        )
+
+    except ccxt.AuthenticationError:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Authentication Error. Please check your API keys.",
+                }
+            ),
+            401,
+        )
+    except Exception as e:
+        return (
+            jsonify({"success": False, "error": f"Error fetching balances: {e}"}),
+            500,
+        )
 
 
 @socketio.on("connect")

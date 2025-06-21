@@ -45,34 +45,17 @@
             </div>
             <div id="price-update-message" style="text-align: center; margin-top: 10px; color: #888; font-size: 0.9em;"></div>
 
-            <!-- Balances Section -->
-            <div>
-                <h2>My Wallets</h2>
+        </div>
+
+        <!-- New Wallets Container -->
+        <div class="container">
+            <h2>My Wallets</h2>
+            <div id="wallets-content">
+                <!-- Content will be loaded here by JavaScript -->
                 {% if not keys_set %}
                     <p class="error">API keys not set. Cannot display balances.</p>
-                {% elif balance_error %}
-                    <p class="error">{{ balance_error }}</p>
                 {% else %}
-                    <div>
-                        <h3>Spot Wallet</h3>
-                        <ul>
-                            {% for asset, balance in spot_assets.items() %}
-                                <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
-                            {% else %}
-                                <li>No assets found.</li>
-                            {% endfor %}
-                        </ul>
-                    </div>
-                    <div>
-                        <h3>Futures Wallet</h3>
-                        <ul>
-                            {% for asset, balance in futures_assets.items() %}
-                                <li><span class="asset">{{ asset }}</span> <span class="balance">{{ "%.6f"|format(balance) }}</span></li>
-                            {% else %}
-                                <li>No assets found.</li>
-                            {% endfor %}
-                        </ul>
-                    </div>
+                    <p>Loading balances...</p>
                 {% endif %}
             </div>
         </div>
@@ -107,6 +90,11 @@
                 <button type="submit">Buy BTC</button>
             </form>
             <div id="trade-status" style="text-align: center; margin-top: 15px; font-weight: bold;"></div>
+
+            <!-- Verification Form (initially hidden) -->
+            <div id="verification-form" style="display: none; margin-top: 20px;">
+                <input type="text" id="verification-code" placeholder="Enter code" maxlength="4" style="padding: 5px; border-radius: 3px; border: 1px solid #ccc; margin-right: 10px;"> <button id="verify-button" style="padding: 5px 10px; background-color: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer;">Verify and Buy</button>
+            </div>
         </div>
     </div>
 </body>
@@ -177,11 +165,52 @@
             }
         });
 
+        // --- New Asynchronous Balance Fetching Script ---
+        const walletsContent = document.getElementById('wallets-content');
+        const keysSet = {{ keys_set|tojson }}; // Pass boolean from Jinja to JS
+
+        if (keysSet) {
+            fetch('/api/balances')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        let spotHtml = '<h3>Spot Wallet</h3><ul>';
+                        if (Object.keys(data.spot_assets).length > 0) {
+                            for (const [asset, balance] of Object.entries(data.spot_assets)) {
+                                spotHtml += `<li><span class="asset">${asset}</span> <span class="balance">${balance.toFixed(6)}</span></li>`;
+                            }
+                        } else {
+                            spotHtml += '<li>No assets found.</li>';
+                        }
+                        spotHtml += '</ul>';
+
+                        let futuresHtml = '<h3>Futures Wallet</h3><ul>';
+                        if (Object.keys(data.futures_assets).length > 0) {
+                            for (const [asset, balance] of Object.entries(data.futures_assets)) {
+                                futuresHtml += `<li><span class="asset">${asset}</span> <span class="balance">${balance.toFixed(6)}</span></li>`;
+                            }
+                        } else {
+                            futuresHtml += '<li>No assets found.</li>';
+                        }
+                        futuresHtml += '</ul>';
+
+                        walletsContent.innerHTML = spotHtml + futuresHtml;
+                    } else {
+                        walletsContent.innerHTML = `<p class="error">${data.error}</p>`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching balances:', error);
+                    walletsContent.innerHTML = '<p class="error">A network error occurred while fetching balances.</p>';
+                });
+        }
+
         // --- New Trading Form Script ---
         const tradeForm = document.getElementById('trade-form');
         const orderTypeSelect = document.getElementById('order-type');
         const limitPriceGroup = document.getElementById('limit-price-group');
         const tradeStatus = document.getElementById('trade-status');
+        let currentRequestId = null; // Variable to store the request ID
         const amountLabel = document.getElementById('amount-label');
         const amountInput = document.getElementById('amount');
 
@@ -202,7 +231,7 @@
             tradeStatus.style.color = '#888';
 
             const formData = {
-                symbol: 'BTC/USDT',
+                symbol: 'BTC/USDT',  
                 type: document.getElementById('order-type').value,
                 side: 'buy',
                 amount: parseFloat(document.getElementById('amount').value),
@@ -218,16 +247,56 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
+                if (data.success && data.verification_required) {
+                    currentRequestId = data.request_id; // Store the request ID
+                    tradeStatus.textContent = "Verification code sent to WhatsApp.";
+                    tradeStatus.style.color = '#007bff';
+                    tradeForm.style.display = 'none';
+                    document.getElementById('verification-form').style.display = 'block';
+                } else if (data.success) {
                     tradeStatus.textContent = `Success! Order ID: ${data.order.id}`;
                     tradeStatus.style.color = '#28a745';
                 } else {
+                    // Handle errors from the server
                     tradeStatus.textContent = `Error: ${data.error}`;
                     tradeStatus.style.color = '#dc3545';
                 }
             })
             .catch(error => {
                 tradeStatus.textContent = 'A network error occurred.';
+                tradeStatus.style.color = '#dc3545';
+            });
+        });
+
+        // --- Verification Form Handling ---
+        const verifyButton = document.getElementById('verify-button');
+        verifyButton.addEventListener('click', () => {
+            const verificationCode = document.getElementById('verification-code').value;
+            tradeStatus.textContent = 'Verifying...';
+            tradeStatus.style.color = '#888';
+
+            fetch('/verify_order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: verificationCode, request_id: currentRequestId }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    tradeStatus.textContent = `Success! Order ID: ${data.order.id}`;
+                    tradeStatus.style.color = '#28a745';
+                    document.getElementById('verification-form').style.display = 'none';
+                    tradeForm.style.display = 'block'; // Show the form again
+                } else {
+                    tradeStatus.textContent = `Verification failed: ${data.error}`;
+                    tradeStatus.style.color = '#dc3545';
+                    // Optionally, allow them to try again by showing the form
+                    document.getElementById('verification-form').style.display = 'none';
+                    tradeForm.style.display = 'block';
+                }
+            })
+            .catch(error => {
+                tradeStatus.textContent = 'A network error occurred during verification.';
                 tradeStatus.style.color = '#dc3545';
             });
         });
